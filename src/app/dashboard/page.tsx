@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { canMutate } from "@/lib/rbac";
 import { Navbar } from "@/components/Navbar";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { RiskDonut, RevenueAtRiskChart } from "@/components/dashboard/RiskCharts";
 import { CustomerTable, type CustomerRow } from "@/components/dashboard/CustomerTable";
+import type { SegmentSummary } from "@/components/dashboard/SegmentPicker";
 import { formatMoney } from "@/lib/utils";
 import type { RiskBand } from "@prisma/client";
 
@@ -18,9 +20,17 @@ export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const customers = await prisma.customer.findMany({
-    include: { riskScore: true, _count: { select: { events: true } } },
-  });
+  const [customers, tags, segments] = await Promise.all([
+    prisma.customer.findMany({
+      include: {
+        riskScore: true,
+        tags: { include: { tag: true } },
+        _count: { select: { events: true } },
+      },
+    }),
+    prisma.tag.findMany({ orderBy: { name: "asc" } }),
+    prisma.segment.findMany({ orderBy: { name: "asc" } }),
+  ]);
 
   const rows: CustomerRow[] = customers
     .map((c) => ({
@@ -33,6 +43,11 @@ export default async function DashboardPage() {
       score: c.riskScore?.score ?? null,
       reason: c.riskScore?.reason ?? null,
       eventCount: c._count.events,
+      tags: c.tags.map((t) => ({
+        id: t.tag.id,
+        name: t.tag.name,
+        color: t.tag.color,
+      })),
     }))
     // Highest risk first so the scary ones sit at the top.
     .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
@@ -97,7 +112,16 @@ export default async function DashboardPage() {
           <RevenueAtRiskChart data={revenueData} />
         </div>
 
-        <CustomerTable customers={rows} />
+        <CustomerTable
+          customers={rows}
+          tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+          segments={segments.map((s) => ({
+            id: s.id,
+            name: s.name,
+            definition: s.definition as SegmentSummary["definition"],
+          }))}
+          canEdit={canMutate(session.user.role)}
+        />
       </main>
     </>
   );

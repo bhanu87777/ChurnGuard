@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSession } from "@/lib/session";
+import { requireRole } from "@/lib/rbac";
+import { audit } from "@/lib/audit";
 import { scoreAndSave } from "@/lib/score-service";
 
 // POST /api/score-all — recompute risk for every active customer.
 export async function POST() {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await requireRole("ANALYST");
+  if (!auth.ok) return auth.response;
 
   const customers = await prisma.customer.findMany({
     where: { status: "ACTIVE" },
@@ -18,5 +19,7 @@ export async function POST() {
     await scoreAndSave(id);
     scored++;
   }
+
+  await audit(auth.user, "customer.score_all", undefined, { scored });
   return NextResponse.json({ scored });
 }

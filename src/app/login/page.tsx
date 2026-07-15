@@ -108,7 +108,7 @@ export default function LoginPage() {
           </button>
 
           <p className="text-center text-sm text-muted">
-            {mode === "login" ? "No account?" : "Already have one?"}{" "}
+            {mode === "login" ? "Setting up a new workspace?" : "Already have an account?"}{" "}
             <button
               type="button"
               onClick={() => {
@@ -120,6 +120,12 @@ export default function LoginPage() {
               {mode === "login" ? "Register" : "Sign in"}
             </button>
           </p>
+          {mode === "register" && (
+            <p className="text-center text-xs text-muted">
+              Registration only bootstraps the first admin account. After that,
+              teammates are invited from Settings → Team.
+            </p>
+          )}
         </form>
 
         <p className="mt-4 text-center text-xs text-muted">

@@ -1,4 +1,14 @@
-import { PrismaClient, Plan, ActivityType, Prisma } from "@prisma/client";
+import {
+  PrismaClient,
+  Plan,
+  ActivityType,
+  Prisma,
+  Role,
+  CustomerStatus,
+  RuleConditionType,
+  TaskStatus,
+  TaskOutcome,
+} from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -18,9 +28,12 @@ interface CustomerSpec {
   plan: Plan;
   mrr: number;
   signupDaysAgo: number;
+  status?: CustomerStatus;
+  churnedDaysAgo?: number;
   // Approximate current risk (0-100) used only to synthesize a believable
   // 6-week history trend so the trend chart looks alive on first load.
   targetRisk: number;
+  tags?: string[];
   events: EventSpec[];
 }
 
@@ -58,6 +71,7 @@ function makeCustomers(): CustomerSpec[] {
     mrr: 1200,
     signupDaysAgo: 400,
     targetRisk: 8,
+    tags: ["VIP"],
     events: [
       ...Array.from({ length: 20 }, (_, i) => ({
         type: ActivityType.LOGIN,
@@ -82,6 +96,7 @@ function makeCustomers(): CustomerSpec[] {
     mrr: 400,
     signupDaysAgo: 220,
     targetRisk: 77,
+    tags: ["At-Risk Watch"],
     events: [
       ...Array.from({ length: 8 }, (_, i) => ({
         type: ActivityType.LOGIN,
@@ -102,6 +117,7 @@ function makeCustomers(): CustomerSpec[] {
     mrr: 600,
     signupDaysAgo: 150,
     targetRisk: 95,
+    tags: ["At-Risk Watch"],
     events: [
       { type: ActivityType.LOGIN, daysAgo: 20 },
       { type: ActivityType.LOGIN, daysAgo: 28 },
@@ -130,6 +146,7 @@ function makeCustomers(): CustomerSpec[] {
     mrr: 49,
     signupDaysAgo: 12,
     targetRisk: 6,
+    tags: ["Onboarding"],
     events: [
       ...Array.from({ length: 6 }, (_, i) => ({
         type: ActivityType.LOGIN,
@@ -182,6 +199,7 @@ function makeCustomers(): CustomerSpec[] {
     mrr: 2000,
     signupDaysAgo: 500,
     targetRisk: 78,
+    tags: ["VIP", "At-Risk Watch"],
     events: [
       { type: ActivityType.LOGIN, daysAgo: 41 },
       { type: ActivityType.PAYMENT, daysAgo: 20, metadata: { amount: 2000 } },
@@ -213,31 +231,119 @@ function makeCustomers(): CustomerSpec[] {
     ],
   });
 
+  // Already churned — gives churn-rate & cohort analytics real data points.
+  specs.push({
+    name: "Mia Chen",
+    email: "mia@driftlabs.co",
+    company: "Drift Labs",
+    plan: Plan.STARTER,
+    mrr: 0,
+    signupDaysAgo: 260,
+    status: CustomerStatus.CHURNED,
+    churnedDaysAgo: 45,
+    targetRisk: 92,
+    events: [
+      ...Array.from({ length: 4 }, (_, i) => ({
+        type: ActivityType.LOGIN,
+        daysAgo: 120 + i * 10,
+      })),
+      { type: ActivityType.PAYMENT_FAILED, daysAgo: 70, metadata: { amount: 49 } },
+      { type: ActivityType.NPS_RESPONSE, daysAgo: 80, metadata: { score: 2 } },
+    ],
+  });
+
+  specs.push({
+    name: "Oliver Grant",
+    email: "oliver@peakmetrics.io",
+    company: "Peak Metrics",
+    plan: Plan.PRO,
+    mrr: 0,
+    signupDaysAgo: 380,
+    status: CustomerStatus.CHURNED,
+    churnedDaysAgo: 100,
+    targetRisk: 88,
+    events: [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        type: ActivityType.LOGIN,
+        daysAgo: 160 + i * 8,
+      })),
+      {
+        type: ActivityType.SUPPORT_TICKET,
+        daysAgo: 130,
+        metadata: { priority: "high", topic: "pricing" },
+      },
+      { type: ActivityType.NPS_RESPONSE, daysAgo: 140, metadata: { score: 4 } },
+    ],
+  });
+
   return specs;
+}
+
+async function seedUser(
+  email: string,
+  name: string,
+  role: Role,
+  passwordHash: string,
+) {
+  return prisma.user.upsert({
+    where: { email },
+    update: { role, isActive: true },
+    create: { email, name, password: passwordHash, role },
+  });
 }
 
 async function main() {
   console.log("Seeding ChurnGuard…");
 
-  // Demo login.
+  // Demo logins — one per role.
   const passwordHash = await bcrypt.hash("demo1234", 10);
-  await prisma.user.upsert({
-    where: { email: "demo@churnguard.app" },
-    update: {},
-    create: {
-      email: "demo@churnguard.app",
-      name: "Demo Operator",
-      password: passwordHash,
-    },
-  });
+  const demo = await seedUser(
+    "demo@churnguard.app",
+    "Demo Operator",
+    Role.ADMIN,
+    passwordHash,
+  );
+  await seedUser(
+    "analyst@churnguard.app",
+    "Demo Analyst",
+    Role.ANALYST,
+    passwordHash,
+  );
+  await seedUser(
+    "viewer@churnguard.app",
+    "Demo Viewer",
+    Role.VIEWER,
+    passwordHash,
+  );
 
-  // Wipe existing demo customers so re-seeding is idempotent.
+  // Wipe existing demo data so re-seeding is idempotent (FK-safe order).
+  // AppSetting is intentionally kept — operator-tuned scoring weights survive re-seeds.
+  await prisma.notification.deleteMany();
+  await prisma.task.deleteMany();
+  await prisma.note.deleteMany();
+  await prisma.customerTag.deleteMany();
+  await prisma.tag.deleteMany();
+  await prisma.segment.deleteMany();
+  await prisma.alertRule.deleteMany();
+  await prisma.apiKey.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.riskScoreHistory.deleteMany();
   await prisma.riskScore.deleteMany();
   await prisma.activityEvent.deleteMany();
   await prisma.customer.deleteMany();
 
+  const tags = await Promise.all(
+    [
+      { name: "VIP", color: "#a855f7" },
+      { name: "Onboarding", color: "#38bdf8" },
+      { name: "At-Risk Watch", color: "#f59e0b" },
+    ].map((t) => prisma.tag.create({ data: t })),
+  );
+  const tagIdByName = new Map(tags.map((t) => [t.name, t.id]));
+
+  const customersByEmail = new Map<string, string>();
   for (const spec of makeCustomers()) {
-    await prisma.customer.create({
+    const customer = await prisma.customer.create({
       data: {
         name: spec.name,
         email: spec.email,
@@ -245,6 +351,9 @@ async function main() {
         plan: spec.plan,
         mrr: spec.mrr,
         signupDate: daysAgo(spec.signupDaysAgo),
+        status: spec.status ?? CustomerStatus.ACTIVE,
+        churnedAt:
+          spec.churnedDaysAgo !== undefined ? daysAgo(spec.churnedDaysAgo) : null,
         events: {
           create: spec.events.map((e) => ({
             type: e.type,
@@ -255,13 +364,85 @@ async function main() {
         riskHistory: {
           create: historyPoints(spec.targetRisk),
         },
+        tags: {
+          create: (spec.tags ?? [])
+            .map((name) => tagIdByName.get(name))
+            .filter((id): id is string => Boolean(id))
+            .map((tagId) => ({ tagId })),
+        },
       },
     });
+    customersByEmail.set(spec.email, customer.id);
   }
 
+  // Context on the risky accounts, so notes & interventions demo well.
+  const priyaId = customersByEmail.get("priya@quantscale.ai")!;
+  const sofiaId = customersByEmail.get("sofia@vantatech.com")!;
+  await prisma.note.createMany({
+    data: [
+      {
+        customerId: priyaId,
+        authorId: demo.id,
+        body: "Card on file expired — billing has already emailed twice. Waiting on their finance team.",
+        createdAt: daysAgo(2),
+      },
+      {
+        customerId: sofiaId,
+        authorId: demo.id,
+        body: "Champion (Marco) left the company in May. New stakeholder hasn't been onboarded yet.",
+        createdAt: daysAgo(10),
+      },
+    ],
+  });
+  await prisma.task.createMany({
+    data: [
+      {
+        customerId: priyaId,
+        title: "Call finance contact about failed payments",
+        status: TaskStatus.OPEN,
+        outcome: TaskOutcome.PENDING,
+        dueDate: daysAgo(-2),
+        assigneeId: demo.id,
+        createdById: demo.id,
+      },
+      {
+        customerId: sofiaId,
+        title: "Schedule exec check-in with new stakeholder",
+        status: TaskStatus.OPEN,
+        outcome: TaskOutcome.PENDING,
+        dueDate: daysAgo(-5),
+        assigneeId: demo.id,
+        createdById: demo.id,
+      },
+    ],
+  });
+
+  // Two starter alert rules so the notification bell has something to catch.
+  await prisma.alertRule.createMany({
+    data: [
+      {
+        name: "Payment failed",
+        conditionType: RuleConditionType.EVENT_OCCURS,
+        params: { eventType: "PAYMENT_FAILED" },
+        notifyInApp: true,
+        createdById: demo.id,
+      },
+      {
+        name: "Account became high risk",
+        conditionType: RuleConditionType.BAND_BECOMES,
+        params: { band: "HIGH" },
+        notifyInApp: true,
+        createdById: demo.id,
+      },
+    ],
+  });
+
   const count = await prisma.customer.count();
-  console.log(`Seeded ${count} customers.`);
-  console.log("Login: demo@churnguard.app / demo1234");
+  console.log(`Seeded ${count} customers, 3 users, 3 tags, 2 alert rules.`);
+  console.log("Logins (password demo1234):");
+  console.log("  admin:   demo@churnguard.app");
+  console.log("  analyst: analyst@churnguard.app");
+  console.log("  viewer:  viewer@churnguard.app");
 }
 
 main()

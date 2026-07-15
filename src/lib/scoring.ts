@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ActivityEvent, Customer } from "@prisma/client";
+import { DEFAULT_WEIGHTS, type ScoringWeights } from "./scoring-weights";
 
 // The Claude model used for scoring. Sonnet gives strong reasoning at low cost;
 // override with SCORING_MODEL in .env if you like.
@@ -82,56 +83,60 @@ export function extractFeatures(
   };
 }
 
-function bandFor(score: number): RiskBand {
-  if (score >= 66) return "HIGH";
-  if (score >= 33) return "MEDIUM";
+function bandFor(score: number, w: ScoringWeights = DEFAULT_WEIGHTS): RiskBand {
+  if (score >= w.bandHighFrom) return "HIGH";
+  if (score >= w.bandMediumFrom) return "MEDIUM";
   return "LOW";
 }
 
 // --- Heuristic scorer (fallback, no API key needed) -------------------------
-export function heuristicScore(f: Features): RiskResult {
+// Weights are operator-tunable from Settings → Scoring (heuristic path only).
+export function heuristicScore(
+  f: Features,
+  w: ScoringWeights = DEFAULT_WEIGHTS,
+): RiskResult {
   let score = 0;
   const reasons: string[] = [];
 
   if (f.daysSinceLastLogin === null) {
-    score += 40;
+    score += w.neverLoggedIn;
     reasons.push("has never logged in");
   } else if (f.daysSinceLastLogin > 30) {
-    score += 35;
+    score += w.inactiveOver30d;
     reasons.push(`no login in ${f.daysSinceLastLogin} days`);
   } else if (f.daysSinceLastLogin > 14) {
-    score += 20;
+    score += w.inactiveOver14d;
     reasons.push(`last login was ${f.daysSinceLastLogin} days ago`);
   }
 
   if (f.logins30d === 0) {
-    score += 15;
+    score += w.zeroLogins30d;
     reasons.push("zero logins in the last 30 days");
   } else if (f.logins30d < 3) {
-    score += 8;
+    score += w.lowLoginFrequency;
     reasons.push("very low login frequency");
   }
 
   if (f.featureUses30d === 0) {
-    score += 12;
+    score += w.noFeatureUse;
     reasons.push("no core-feature usage recently");
   }
 
-  score += Math.min(f.failedPayments30d * 15, 30);
+  score += Math.min(f.failedPayments30d * w.failedPaymentEach, w.failedPaymentCap);
   if (f.failedPayments30d > 0)
     reasons.push(`${f.failedPayments30d} failed payment(s)`);
 
-  score += Math.min(f.supportTickets30d * 6, 18);
+  score += Math.min(f.supportTickets30d * w.ticketEach, w.ticketCap);
   if (f.supportTickets30d >= 2)
     reasons.push(`${f.supportTickets30d} support tickets`);
 
   if (f.latestNps !== null && f.latestNps <= 6) {
-    score += 15;
+    score += w.lowNps;
     reasons.push(`low NPS (${f.latestNps})`);
   }
 
   score = Math.max(0, Math.min(100, score));
-  const band = bandFor(score);
+  const band = bandFor(score, w);
   const reason =
     reasons.length > 0
       ? `Customer ${reasons.join(", ")}.`
@@ -302,11 +307,12 @@ async function geminiScore(
 // so the app always works end-to-end even with no key configured.
 export async function scoreCustomer(
   customer: Customer & { events: ActivityEvent[] },
+  weights?: ScoringWeights,
 ): Promise<RiskResult> {
   const features = extractFeatures(customer);
   return (
     (await claudeScore(customer, features)) ??
     (await geminiScore(customer, features)) ??
-    heuristicScore(features)
+    heuristicScore(features, weights)
   );
 }

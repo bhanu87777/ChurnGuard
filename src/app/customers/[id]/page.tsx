@@ -2,30 +2,26 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { canMutate, isAdmin } from "@/lib/rbac";
 import { Navbar } from "@/components/Navbar";
 import { RiskBadge } from "@/components/RiskBadge";
 import { CustomerActions } from "@/components/customer/CustomerActions";
 import { RiskTrend } from "@/components/customer/RiskTrend";
 import { LogEventForm } from "@/components/customer/LogEventForm";
+import { TagEditor } from "@/components/customer/TagEditor";
+import { CustomerTabs } from "@/components/customer/CustomerTabs";
 import { extractFeatures } from "@/lib/scoring";
-import { formatMoney, timeAgo } from "@/lib/utils";
+import { formatMoney } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
-const eventLabels: Record<string, string> = {
-  LOGIN: "🔓 Logged in",
-  FEATURE_USE: "🧩 Used a feature",
-  SUPPORT_TICKET: "🎫 Opened a support ticket",
-  PAYMENT: "💳 Payment succeeded",
-  PAYMENT_FAILED: "⚠️ Payment failed",
-  NPS_RESPONSE: "📊 Left an NPS response",
-};
-
 export default async function CustomerPage({ params }: Params) {
   const session = await getSession();
   if (!session) redirect("/login");
+  const role = session.user.role;
+  const editable = canMutate(role);
 
   const { id } = await params;
   const customer = await prisma.customer.findUnique({
@@ -34,6 +30,15 @@ export default async function CustomerPage({ params }: Params) {
       riskScore: true,
       events: { orderBy: { occurredAt: "desc" } },
       riskHistory: { orderBy: { createdAt: "asc" } },
+      tags: { include: { tag: true } },
+      notes: {
+        orderBy: { createdAt: "desc" },
+        include: { author: { select: { id: true, name: true, email: true } } },
+      },
+      tasks: {
+        orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+        include: { assignee: { select: { id: true, name: true, email: true } } },
+      },
     },
   });
   if (!customer) notFound();
@@ -91,8 +96,17 @@ export default async function CustomerPage({ params }: Params) {
                 {customer.status}
               </span>
             </div>
+            <TagEditor
+              customerId={customer.id}
+              tags={customer.tags.map((t) => t.tag)}
+              canEdit={editable}
+            />
           </div>
-          <CustomerActions customerId={customer.id} />
+          <CustomerActions
+            customerId={customer.id}
+            canRescore={editable}
+            canDelete={isAdmin(role)}
+          />
         </div>
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -162,37 +176,41 @@ export default async function CustomerPage({ params }: Params) {
 
         {/* Trend + live ingestion */}
         <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <div className="md:col-span-2">
+          <div className={editable ? "md:col-span-2" : "md:col-span-3"}>
             <RiskTrend data={trendData} />
           </div>
-          <LogEventForm customerId={customer.id} />
+          {editable && <LogEventForm customerId={customer.id} />}
         </div>
 
-        {/* Activity timeline */}
+        {/* Activity / notes / interventions */}
         <div className="mt-4 rounded-2xl border border-border bg-surface p-5">
-          <h2 className="mb-4 font-medium">
-            Activity timeline{" "}
-            <span className="text-muted">({customer.events.length})</span>
-          </h2>
-          <ol className="space-y-3">
-            {customer.events.map((e) => (
-              <li key={e.id} className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
-                <div className="flex-1">
-                  <span>{eventLabels[e.type] ?? e.type}</span>
-                  {e.metadata != null && (
-                    <span className="ml-2 text-xs text-muted">
-                      {JSON.stringify(e.metadata)}
-                    </span>
-                  )}
-                </div>
-                <span className="text-xs text-muted">{timeAgo(e.occurredAt)}</span>
-              </li>
-            ))}
-            {customer.events.length === 0 && (
-              <li className="text-sm text-muted">No activity recorded.</li>
-            )}
-          </ol>
+          <CustomerTabs
+            customerId={customer.id}
+            events={customer.events.map((e) => ({
+              id: e.id,
+              type: e.type,
+              metadata: e.metadata,
+              occurredAt: e.occurredAt.toISOString(),
+            }))}
+            notes={customer.notes.map((n) => ({
+              id: n.id,
+              body: n.body,
+              createdAt: n.createdAt.toISOString(),
+              author: n.author,
+            }))}
+            tasks={customer.tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              outcome: t.outcome,
+              dueDate: t.dueDate?.toISOString() ?? null,
+              completedAt: t.completedAt?.toISOString() ?? null,
+              assignee: t.assignee,
+            }))}
+            selfId={session.user.id}
+            canEdit={editable}
+            isAdmin={isAdmin(role)}
+          />
         </div>
       </main>
     </>

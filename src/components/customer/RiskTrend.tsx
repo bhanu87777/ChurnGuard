@@ -10,6 +10,13 @@ import {
   ResponsiveContainer,
   ReferenceArea,
 } from "recharts";
+import {
+  AXIS_STROKE,
+  BAND_COLORS,
+  BRAND,
+  CHART_TOOLTIP_STYLE,
+  GRID_STROKE,
+} from "@/components/charts/chartTheme";
 
 export interface TrendPoint {
   label: string; // e.g. "Jul 3"
@@ -35,26 +42,19 @@ export function RiskTrend({ data }: { data: TrendPoint[] }) {
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
             {/* Band shading: green / amber / red zones */}
-            <ReferenceArea y1={0} y2={33} fill="#22c55e" fillOpacity={0.06} />
-            <ReferenceArea y1={33} y2={66} fill="#f59e0b" fillOpacity={0.06} />
-            <ReferenceArea y1={66} y2={100} fill="#ef4444" fillOpacity={0.06} />
-            <CartesianGrid strokeDasharray="3 3" stroke="#253049" />
-            <XAxis dataKey="label" stroke="#93a0b8" fontSize={12} />
-            <YAxis domain={[0, 100]} stroke="#93a0b8" fontSize={12} />
-            <Tooltip
-              contentStyle={{
-                background: "#1a2234",
-                border: "1px solid #253049",
-                borderRadius: 8,
-                color: "#e6eaf2",
-              }}
-            />
+            <ReferenceArea y1={0} y2={33} fill={BAND_COLORS.LOW} fillOpacity={0.06} />
+            <ReferenceArea y1={33} y2={66} fill={BAND_COLORS.MEDIUM} fillOpacity={0.06} />
+            <ReferenceArea y1={66} y2={100} fill={BAND_COLORS.HIGH} fillOpacity={0.06} />
+            <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis dataKey="label" stroke={AXIS_STROKE} fontSize={12} />
+            <YAxis domain={[0, 100]} stroke={AXIS_STROKE} fontSize={12} />
+            <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
             <Line
               type="monotone"
               dataKey="score"
-              stroke="#6366f1"
+              stroke={BRAND}
               strokeWidth={2}
-              dot={{ r: 3, fill: "#6366f1" }}
+              dot={{ r: 3, fill: BRAND }}
               activeDot={{ r: 5 }}
             />
           </LineChart>

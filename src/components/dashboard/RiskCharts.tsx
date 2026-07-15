@@ -13,12 +13,13 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
-
-const COLORS: Record<string, string> = {
-  LOW: "#22c55e",
-  MEDIUM: "#f59e0b",
-  HIGH: "#ef4444",
-};
+import {
+  AXIS_STROKE,
+  BAND_COLORS,
+  BRAND,
+  CHART_TOOLTIP_STYLE,
+  GRID_STROKE,
+} from "@/components/charts/chartTheme";
 
 export function RiskDonut({
   data,
@@ -43,17 +44,10 @@ export function RiskDonut({
               paddingAngle={2}
             >
               {data.map((d) => (
-                <Cell key={d.name} fill={COLORS[d.name] ?? "#6366f1"} />
+                <Cell key={d.name} fill={BAND_COLORS[d.name] ?? BRAND} />
               ))}
             </Pie>
-            <Tooltip
-              contentStyle={{
-                background: "#1a2234",
-                border: "1px solid #253049",
-                borderRadius: 8,
-                color: "#e6eaf2",
-              }}
-            />
+            <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
             <Legend />
           </PieChart>
         </ResponsiveContainer>
@@ -76,21 +70,16 @@ export function RevenueAtRiskChart({
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#253049" />
-            <XAxis dataKey="band" stroke="#93a0b8" fontSize={12} />
-            <YAxis stroke="#93a0b8" fontSize={12} />
+            <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+            <XAxis dataKey="band" stroke={AXIS_STROKE} fontSize={12} />
+            <YAxis stroke={AXIS_STROKE} fontSize={12} />
             <Tooltip
               cursor={{ fill: "#ffffff08" }}
-              contentStyle={{
-                background: "#1a2234",
-                border: "1px solid #253049",
-                borderRadius: 8,
-                color: "#e6eaf2",
-              }}
+              contentStyle={CHART_TOOLTIP_STYLE}
             />
             <Bar dataKey="revenue" radius={[6, 6, 0, 0]}>
               {data.map((d) => (
-                <Cell key={d.band} fill={COLORS[d.band] ?? "#6366f1"} />
+                <Cell key={d.band} fill={BAND_COLORS[d.band] ?? BRAND} />
               ))}
             </Bar>
           </BarChart>

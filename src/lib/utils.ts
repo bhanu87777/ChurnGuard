@@ -20,6 +20,23 @@ export function formatMoney(n: number): string {
   }).format(n);
 }
 
+export function formatPercent(n: number, digits = 1): string {
+  return `${n.toFixed(digits)}%`;
+}
+
+// "2026-07" / Date -> "Jul 2026" for cohort & trend labels.
+export function formatMonth(month: Date | string): string {
+  const d =
+    typeof month === "string" && /^\d{4}-\d{2}$/.test(month)
+      ? new Date(`${month}-01T00:00:00Z`)
+      : new Date(month);
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export function timeAgo(date: Date | string): string {
   const d = new Date(date).getTime();
   const days = Math.floor((Date.now() - d) / (1000 * 60 * 60 * 24));

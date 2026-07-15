@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RiskBand } from "@prisma/client";
 import { RiskBadge } from "@/components/RiskBadge";
+import { TagChip } from "@/components/TagChip";
+import { useToast } from "@/components/ui/Toast";
+import {
+  SegmentPicker,
+  type SegmentSummary,
+} from "@/components/dashboard/SegmentPicker";
 import { formatMoney } from "@/lib/utils";
 
 export interface CustomerRow {
@@ -16,40 +23,127 @@ export interface CustomerRow {
   score: number | null;
   reason: string | null;
   eventCount: number;
+  tags: { id: string; name: string; color: string }[];
+}
+
+export interface TagOption {
+  id: string;
+  name: string;
+  color: string;
 }
 
 const BAND_FILTERS = ["ALL", "HIGH", "MEDIUM", "LOW"] as const;
 
-export function CustomerTable({ customers }: { customers: CustomerRow[] }) {
+export function CustomerTable({
+  customers,
+  tags,
+  segments,
+  canEdit,
+}: {
+  customers: CustomerRow[];
+  tags: TagOption[];
+  segments: SegmentSummary[];
+  canEdit: boolean;
+}) {
   const router = useRouter();
+  const { toast } = useToast();
   const [scoring, setScoring] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [query, setQuery] = useState("");
   const [band, setBand] = useState<(typeof BAND_FILTERS)[number]>("ALL");
+  const [tagId, setTagId] = useState<string>("ALL");
+  const [segmentId, setSegmentId] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // "/" focuses search, Escape clears it — small keyboard polish.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      const typing =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT";
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (e.key === "Escape" && target === searchRef.current) {
+        setQuery("");
+        searchRef.current?.blur();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const filtered = customers.filter((c) => {
     const matchesBand = band === "ALL" || c.band === band;
+    const matchesTag = tagId === "ALL" || c.tags.some((t) => t.id === tagId);
     const q = query.trim().toLowerCase();
     const matchesQuery =
       q === "" ||
       c.name.toLowerCase().includes(q) ||
       (c.company ?? "").toLowerCase().includes(q);
-    return matchesBand && matchesQuery;
+    return matchesBand && matchesTag && matchesQuery;
   });
+
+  // The current filters expressed as a segment definition (for save/apply/export).
+  const currentDefinition = useMemo(() => {
+    const def: SegmentSummary["definition"] = {};
+    if (query.trim()) def.query = query.trim();
+    if (band !== "ALL") def.bands = [band];
+    if (tagId !== "ALL") def.tagIds = [tagId];
+    return def;
+  }, [query, band, tagId]);
+
+  const selectedSegment = segments.find((s) => s.id === segmentId) ?? null;
+  const dirty =
+    JSON.stringify(currentDefinition) !==
+    JSON.stringify(selectedSegment?.definition ?? {});
+  const hasFilters = Object.keys(currentDefinition).length > 0;
+
+  function applySegment(segment: SegmentSummary | null) {
+    setSegmentId(segment?.id ?? null);
+    const def = segment?.definition ?? {};
+    setQuery(def.query ?? "");
+    setBand(
+      def.bands && def.bands.length === 1 &&
+        (BAND_FILTERS as readonly string[]).includes(def.bands[0])
+        ? (def.bands[0] as (typeof BAND_FILTERS)[number])
+        : "ALL",
+    );
+    setTagId(def.tagIds && def.tagIds.length === 1 ? def.tagIds[0] : "ALL");
+  }
 
   async function scoreAll() {
     setScoring(true);
     try {
-      await fetch("/api/score-all", { method: "POST" });
+      const res = await fetch("/api/score-all", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast(`Re-scored ${data.scored ?? "all"} customers.`);
+      } else {
+        toast("Re-score failed.", "error");
+      }
       router.refresh();
     } finally {
       setScoring(false);
     }
   }
 
+  function exportCsv() {
+    const params = new URLSearchParams();
+    if (band !== "ALL") params.set("band", band);
+    if (query.trim()) params.set("q", query.trim());
+    if (tagId !== "ALL") params.set("tag", tagId);
+    const qs = params.toString();
+    window.location.href = `/api/export/customers${qs ? `?${qs}` : ""}`;
+    toast("Export started.");
+  }
+
   return (
     <div className="rounded-2xl border border-border bg-surface">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <h3 className="font-medium">
           Customers{" "}
           <span className="text-muted">
@@ -57,33 +151,89 @@ export function CustomerTable({ customers }: { customers: CustomerRow[] }) {
             {filtered.length !== customers.length && ` of ${customers.length}`})
           </span>
         </h3>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowAdd((s) => !s)}
-            className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
-          >
-            {showAdd ? "Cancel" : "+ Add customer"}
-          </button>
-          <button
-            onClick={scoreAll}
-            disabled={scoring}
-            className="rounded-lg bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg transition hover:opacity-90 disabled:opacity-50"
-          >
-            {scoring ? "Scoring…" : "⚡ Re-score all"}
-          </button>
+        <div className="flex flex-wrap gap-2">
+          {canEdit && (
+            <>
+              <button
+                onClick={exportCsv}
+                className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
+              >
+                Export CSV
+              </button>
+              <Link
+                href="/customers/import"
+                className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
+              >
+                Import CSV
+              </Link>
+              <button
+                onClick={() => setShowAdd((s) => !s)}
+                className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
+              >
+                {showAdd ? "Cancel" : "+ Add customer"}
+              </button>
+              <button
+                onClick={scoreAll}
+                disabled={scoring}
+                className="rounded-lg bg-brand px-3 py-1.5 text-sm font-medium text-brand-fg transition hover:opacity-90 disabled:opacity-50"
+              >
+                {scoring ? "Scoring…" : "⚡ Re-score all"}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {showAdd && <AddCustomerForm onDone={() => { setShowAdd(false); router.refresh(); }} />}
-
-      {/* Search + band filter */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name or company…"
-          className="flex-1 rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-sm outline-none focus:border-brand"
+      {showAdd && (
+        <AddCustomerForm
+          onDone={() => {
+            setShowAdd(false);
+            router.refresh();
+          }}
         />
+      )}
+
+      {/* Segments + search + band/tag filters */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
+        <SegmentPicker
+          segments={segments}
+          selectedId={segmentId}
+          dirty={dirty && hasFilters}
+          canEdit={canEdit}
+          onApply={applySegment}
+          onDeleted={(id) => {
+            if (segmentId === id) setSegmentId(null);
+            router.refresh();
+          }}
+          onSaved={() => router.refresh()}
+          currentDefinition={currentDefinition}
+        />
+        <div className="relative min-w-40 flex-1">
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name or company…"
+            className="w-full rounded-lg border border-border bg-surface-2 px-3 py-1.5 pr-8 text-sm outline-none focus:border-brand"
+          />
+          <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-surface px-1.5 text-[10px] text-muted">
+            /
+          </kbd>
+        </div>
+        {tags.length > 0 && (
+          <select
+            value={tagId}
+            onChange={(e) => setTagId(e.target.value)}
+            className="rounded-lg border border-border bg-surface-2 px-3 py-1.5 text-sm outline-none focus:border-brand"
+          >
+            <option value="ALL">All tags</option>
+            {tags.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="flex gap-1">
           {BAND_FILTERS.map((b) => (
             <button
@@ -120,7 +270,12 @@ export function CustomerTable({ customers }: { customers: CustomerRow[] }) {
                 className="cursor-pointer border-b border-border/50 transition last:border-0 hover:bg-surface-2"
               >
                 <td className="px-5 py-3">
-                  <div className="font-medium">{c.name}</div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium">{c.name}</span>
+                    {c.tags.map((t) => (
+                      <TagChip key={t.id} name={t.name} color={t.color} />
+                    ))}
+                  </div>
                   <div className="text-xs text-muted">
                     {c.company ?? "—"} · {c.eventCount} events
                   </div>
@@ -143,7 +298,7 @@ export function CustomerTable({ customers }: { customers: CustomerRow[] }) {
               <tr>
                 <td colSpan={5} className="px-5 py-10 text-center text-muted">
                   {customers.length === 0
-                    ? "No customers yet. Add one to get started."
+                    ? "No customers yet. Add one or import a CSV to get started."
                     : "No customers match your filters."}
                 </td>
               </tr>
@@ -156,6 +311,7 @@ export function CustomerTable({ customers }: { customers: CustomerRow[] }) {
 }
 
 function AddCustomerForm({ onDone }: { onDone: () => void }) {
+  const { toast } = useToast();
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -169,12 +325,18 @@ function AddCustomerForm({ onDone }: { onDone: () => void }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await fetch("/api/customers", {
+      const res = await fetch("/api/customers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...form, mrr: Number(form.mrr) }),
       });
-      onDone();
+      if (res.ok) {
+        toast("Customer added.");
+        onDone();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast(data.error ?? "Could not add customer.", "error");
+      }
     } finally {
       setSaving(false);
     }

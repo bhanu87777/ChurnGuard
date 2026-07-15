@@ -40,3 +40,24 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
+
+/* Toast slide-in */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-enter {
+  animation: toast-in 0.18s ease-out;
+}
+
+/* Range inputs (scoring-weight sliders) in brand color */
+input[type="range"] {
+  accent-color: var(--brand);
+}
