@@ -10,6 +10,19 @@ const MODEL = process.env.SCORING_MODEL || "claude-sonnet-5";
 // Studio). "gemini-flash-latest" tracks the current free flash model.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
+// Free-tier daily quotas are counted PER MODEL, so each entry below is a
+// separate quota bucket. When the preferred model is exhausted (429) or
+// unavailable (404/503), geminiScore retries the same request on the next one
+// before falling through to the heuristic.
+const GEMINI_MODELS = [
+  ...new Set([
+    GEMINI_MODEL,
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
+  ]),
+];
+
 export type RiskBand = "LOW" | "MEDIUM" | "HIGH";
 
 export interface RiskResult {
@@ -264,21 +277,31 @@ async function geminiScore(
   };
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: scoringPrompt(customer, features) }] }],
-          generationConfig: { responseMimeType: "application/json", responseSchema, maxOutputTokens: 2048 },
-        }),
-      },
-    );
-    if (!res.ok) {
-      console.error("Gemini scoring failed:", res.status, await res.text());
-      return null;
+    // Quota errors are per model — walk the fallback chain before giving up.
+    let res: Response | null = null;
+    let model = GEMINI_MODEL;
+    for (const candidate of GEMINI_MODELS) {
+      const attempt = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: scoringPrompt(customer, features) }] }],
+            generationConfig: { responseMimeType: "application/json", responseSchema, maxOutputTokens: 2048 },
+          }),
+        },
+      );
+      if (attempt.ok) {
+        res = attempt;
+        model = candidate;
+        break;
+      }
+      console.error(`Gemini scoring failed (${candidate}):`, attempt.status, await attempt.text());
+      if (![429, 404, 503].includes(attempt.status)) return null;
     }
+    if (!res) return null;
+
     const data = await res.json();
     const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) return null;
@@ -295,7 +318,7 @@ async function geminiScore(
       band: input.band ?? bandFor(score),
       reason: input.reason,
       action: input.action,
-      model: GEMINI_MODEL,
+      model,
     };
   } catch (err) {
     console.error("Gemini scoring failed:", err);
